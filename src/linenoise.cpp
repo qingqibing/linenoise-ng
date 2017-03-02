@@ -430,36 +430,47 @@ static int write32(int fd, char32_t* text32, int len32) {
 
 class Utf32String {
  public:
-  Utf32String() : _length(0) { _data = new char32_t[1](); }
+  Utf32String() : _length(0), _data(nullptr) { 
+    // note: parens intentional, _data must be properly initialized
+    _data = new char32_t[1](); 
+  }
 
-  explicit Utf32String(const char* src) {
+  explicit Utf32String(const char* src) : _length(0), _data(nullptr) {
     size_t len = strlen(src);
-    _data = new char32_t[len + 1];
+    // note: parens intentional, _data must be properly initialized
+    _data = new char32_t[len + 1]();
     copyString8to32(_data, len + 1, _length, src);
   }
 
-  explicit Utf32String(const char8_t* src) {
+  explicit Utf32String(const char8_t* src) : _length(0), _data(nullptr) {
     size_t len = strlen(reinterpret_cast<const char*>(src));
-    _data = new char32_t[len + 1];
+    // note: parens intentional, _data must be properly initialized
+    _data = new char32_t[len + 1]();
     copyString8to32(_data, len + 1, _length, src);
   }
 
-  explicit Utf32String(const char32_t* src) {
+  explicit Utf32String(const char32_t* src) : _length(0), _data(nullptr) {
     for (_length = 0; src[_length] != 0; ++_length) {
     }
 
+    // note: parens intentional, _data must be properly initialized
     _data = new char32_t[_length + 1]();
     memcpy(_data, src, _length * sizeof(char32_t));
   }
 
-  explicit Utf32String(const char32_t* src, int len) : _length(len) {
+  explicit Utf32String(const char32_t* src, int len) : _length(len), _data(nullptr) {
+    // note: parens intentional, _data must be properly initialized
     _data = new char32_t[len + 1]();
     memcpy(_data, src, len * sizeof(char32_t));
   }
 
-  explicit Utf32String(int len) : _length(0) { _data = new char32_t[len](); }
+  explicit Utf32String(int len) : _length(0), _data(nullptr) { 
+    // note: parens intentional, _data must be properly initialized
+    _data = new char32_t[len](); 
+  }
 
-  explicit Utf32String(const Utf32String& that) : _length(that._length) {
+  explicit Utf32String(const Utf32String& that) : _length(that._length), _data(nullptr) {
+    // note: parens intentional, _data must be properly initialized
     _data = new char32_t[_length + 1]();
     memcpy(_data, that._data, sizeof(char32_t) * _length);
   }
@@ -1061,7 +1072,7 @@ static int getScreenRows(void) {
   return (rows > 0) ? rows : 24;
 }
 
-static void setDisplayAttribute(bool enhancedDisplay) {
+static void setDisplayAttribute(bool enhancedDisplay, bool error) {
 #ifdef _WIN32
   if (enhancedDisplay) {
     CONSOLE_SCREEN_BUFFER_INFO inf;
@@ -1090,7 +1101,8 @@ static void setDisplayAttribute(bool enhancedDisplay) {
   }
 #else
   if (enhancedDisplay) {
-    if (write(1, "\x1b[1;34m", 7) == -1)
+    char const* p = (error ? "\x1b[1;31m" : "\x1b[1;34m");
+    if (write(1, p, 7) == -1)
       return; /* bright blue (visible with both B&W bg) */
   } else {
     if (write(1, "\x1b[0m", 4) == -1) return; /* reset */
@@ -1196,25 +1208,62 @@ static void dynamicRefresh(PromptBase& pi, char32_t* buf32, int len, int pos) {
 void InputBuffer::refreshLine(PromptBase& pi) {
   // check for a matching brace/bracket/paren, remember its position if found
   int highlight = -1;
+  bool indicateError = false;
   if (pos < len) {
     /* this scans for a brace matching buf32[pos] to highlight */
+    unsigned char part1, part2;
     int scanDirection = 0;
-    if (strchr("}])", buf32[pos]))
+    if (strchr("}])", buf32[pos])) {
       scanDirection = -1; /* backwards */
-    else if (strchr("{[(", buf32[pos]))
+      if (buf32[pos] == '}') {
+        part1 = '}'; part2 = '{';
+      } else if (buf32[pos] == ']') {
+        part1 = ']'; part2 = '[';
+      } else {
+        part1 = ')'; part2 = '(';
+      }
+    }
+    else if (strchr("{[(", buf32[pos])) {
       scanDirection = 1; /* forwards */
+      if (buf32[pos] == '{') {
+        //part1 = '{'; part2 = '}';
+        part1 = '}'; part2 = '{';
+      } else if (buf32[pos] == '[') {
+        //part1 = '['; part2 = ']';
+        part1 = ']'; part2 = '[';
+      } else {
+        //part1 = '('; part2 = ')';
+        part1 = ')'; part2 = '(';
+      }
+    }
 
     if (scanDirection) {
       int unmatched = scanDirection;
+      int unmatchedOther = 0;
       for (int i = pos + scanDirection; i >= 0 && i < len; i += scanDirection) {
         /* TODO: the right thing when inside a string */
+        if (strchr("}])", buf32[i])) {
+          if (buf32[i] == part1) {
+            --unmatched;
+          } else {
+            --unmatchedOther;
+          }
+        } else if (strchr("{[(", buf32[i])) {
+          if (buf32[i] == part2) {
+            ++unmatched;
+          } else {
+            ++unmatchedOther;
+          }
+        }
+/*
         if (strchr("}])", buf32[i]))
           --unmatched;
         else if (strchr("{[(", buf32[i]))
           ++unmatched;
-
+*/
         if (unmatched == 0) {
           highlight = i;
+          indicateError = (unmatchedOther != 0);
           break;
         }
       }
@@ -1251,9 +1300,9 @@ void InputBuffer::refreshLine(PromptBase& pi) {
     if (write32(1, buf32, len) == -1) return;
   } else {
     if (write32(1, buf32, highlight) == -1) return;
-    setDisplayAttribute(true); /* bright blue (visible with both B&W bg) */
+    setDisplayAttribute(true, indicateError); /* bright blue (visible with both B&W bg) */
     if (write32(1, &buf32[highlight], 1) == -1) return;
-    setDisplayAttribute(false);
+    setDisplayAttribute(false, indicateError);
     if (write32(1, buf32 + highlight + 1, len - highlight - 1) == -1) return;
   }
 
@@ -1278,9 +1327,9 @@ void InputBuffer::refreshLine(PromptBase& pi) {
     if (write32(1, buf32, len) == -1) return;
   } else {  // highlight the matching brace/bracket/parenthesis
     if (write32(1, buf32, highlight) == -1) return;
-    setDisplayAttribute(true);
+    setDisplayAttribute(true, indicateError);
     if (write32(1, &buf32[highlight], 1) == -1) return;
-    setDisplayAttribute(false);
+    setDisplayAttribute(false, indicateError);
     if (write32(1, buf32 + highlight + 1, len - highlight - 1) == -1) return;
   }
 
@@ -2198,7 +2247,7 @@ int InputBuffer::incrementalHistorySearch(PromptBase& pi, int startChar) {
                  historyLinePosition);  // draw user's text with our prompt
 
   // loop until we get an exit character
-  int c;
+  int c = 0;
   bool keepLooping = true;
   bool useSearchedLine = true;
   bool searchAgain = false;
@@ -2335,6 +2384,10 @@ int InputBuffer::incrementalHistorySearch(PromptBase& pi, int startChar) {
     // if we are staying in search mode, search now
     if (keepLooping) {
       bufferSize = historyLineLength + 1;
+      if (activeHistoryLine) {
+        delete[] activeHistoryLine;
+        activeHistoryLine = nullptr;
+      }
       activeHistoryLine = new char32_t[bufferSize];
       copyString8to32(activeHistoryLine, bufferSize, ucharCount,
                       history[historyIndex]);
@@ -2368,6 +2421,7 @@ int InputBuffer::incrementalHistorySearch(PromptBase& pi, int startChar) {
             historySearchIndex += dp.direction;
             bufferSize = strlen8(history[historySearchIndex]) + 1;
             delete[] activeHistoryLine;
+            activeHistoryLine = nullptr;
             activeHistoryLine = new char32_t[bufferSize];
             copyString8to32(activeHistoryLine, bufferSize, ucharCount,
                             history[historySearchIndex]);
@@ -2382,6 +2436,7 @@ int InputBuffer::incrementalHistorySearch(PromptBase& pi, int startChar) {
       }
       if (activeHistoryLine) {
         delete[] activeHistoryLine;
+        activeHistoryLine = nullptr;
       }
       bufferSize = historyLineLength + 1;
       activeHistoryLine = new char32_t[bufferSize];
@@ -2418,6 +2473,7 @@ int InputBuffer::incrementalHistorySearch(PromptBase& pi, int startChar) {
   }
   if (activeHistoryLine) {
     delete[] activeHistoryLine;
+    activeHistoryLine = nullptr;
   }
   dynamicRefresh(pb, buf32, len,
                  pos);  // redraw the original prompt with current input
@@ -2439,8 +2495,11 @@ static bool isCharacterAlphanumeric(char32_t testChar) {
 #ifndef _WIN32
 static bool gotResize = false;
 #endif
+static int keyType = 0;
 
 int InputBuffer::getInputLine(PromptBase& pi) {
+  keyType = 0;
+
   // The latest history entry is always our current buffer
   if (len > 0) {
     size_t bufferSize = sizeof(char32_t) * len + 1;
@@ -2482,6 +2541,16 @@ int InputBuffer::getInputLine(PromptBase& pi) {
     int c;
     if (terminatingKeystroke == -1) {
       c = linenoiseReadChar();  // get a new keystroke
+
+      keyType = 0; 
+      if (c != 0) {
+        // set flag that we got some input
+        if (c == ctrlChar('C')) {
+          keyType = 1;
+        } else if (c == ctrlChar('D')) {
+          keyType = 2;
+        }
+      }
 
 #ifndef _WIN32
       if (c == 0 && gotResize) {
@@ -3368,4 +3437,8 @@ int linenoiseInstallWindowChangeHandler(void) {
   }
 #endif
   return 0;
+}
+
+int linenoiseKeyType(void) {
+  return keyType;
 }
