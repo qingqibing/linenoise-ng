@@ -3339,7 +3339,18 @@ char* linenoiseHistoryLine(int index) {
 /* Save the history in the specified file. On success 0 is returned
  * otherwise -1 is returned. */
 int linenoiseHistorySave(const char* filename) {
+#if _WIN32
   FILE* fp = fopen(filename, "wt");
+#else
+  int fd = open(filename, O_CREAT | O_TRUNC | O_WRONLY, ~(S_IXUSR | S_IRWXG | S_IRWXO));
+
+  if (fd < 0) {
+    return -1;
+  }
+
+  FILE* fp = fdopen(fd, "wt");
+#endif
+
   if (fp == NULL) {
     return -1;
   }
@@ -3349,7 +3360,9 @@ int linenoiseHistorySave(const char* filename) {
       fprintf(fp, "%s\n", history[j]);
     }
   }
+
   fclose(fp);
+
   return 0;
 }
 
